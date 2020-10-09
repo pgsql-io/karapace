@@ -22,7 +22,6 @@ clean:
 
 .PHONY: build-dep-fedora
 build-dep-fedora: /usr/bin/rpmbuild
-	$(MAKE) -C dependencies install
 	sudo dnf -y builddep karapace.spec
 
 .PHONY: $(KAFKA_IMAGE)
