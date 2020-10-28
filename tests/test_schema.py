@@ -5,6 +5,8 @@ Copyright (c) 2019 Aiven Ltd
 See LICENSE for details
 """
 from kafka import KafkaProducer
+from karapace.compatibility import Compatibility, IncompatibleSchema
+from karapace.schema_reader import TypedSchema
 
 import asyncio
 import json as jsonlib
@@ -1775,3 +1777,182 @@ async def test_full_transitive_failure(registry_async_client, compatibility):
     res = await registry_async_client.post(f"subjects/{subject}/versions", json={"schema": jsonlib.dumps(evolved)})
     assert not res.ok
     assert res.status == 409
+
+
+async def test_full_transitive_failure2():
+    compatibility = "FULL_TRANSITIVE"
+    init = {
+        'type': 'record',
+        'name': 'credit',
+        'namespace': 'marketplace.core.entity',
+        'fields': [{
+            'type': 'string',
+            'name': 'id'
+        }, {
+            'type': 'string',
+            'name': 'accountId'
+        }, {
+            'type': 'string',
+            'name': 'externalSource'
+        }, {
+            'type': 'string',
+            'name': 'externalId'
+        }, {
+            'type': {
+                'type': 'record',
+                'name': 'product',
+                'namespace': 'marketplace.core.entity',
+                'fields': [{
+                    'type': 'string',
+                    'name': 'id'
+                }, {
+                    'type': 'string',
+                    'name': 'externalSource'
+                }, {
+                    'type': 'string',
+                    'name': 'externalId'
+                }, {
+                    'type': ['null', 'int'],
+                    'name': 'publicationDays',
+                    'default': "null"
+                }, {
+                    'type': {
+                        'type': 'record',
+                        'name': 'translation',
+                        'namespace': 'marketplace.core.entity',
+                        'fields': [{
+                            'type': ['null', 'string'],
+                            'name': 'de',
+                            'default': "null"
+                        }, {
+                            'type': ['null', 'string'],
+                            'name': 'fr',
+                            'default': "null"
+                        }, {
+                            'type': ['null', 'string'],
+                            'name': 'en',
+                            'default': "null"
+                        }]
+                    },
+                    'name': 'name'
+                }]
+            },
+            'name': 'product'
+        }, {
+            'type': 'string',
+            'name': 'validFrom'
+        }, {
+            'type': 'string',
+            'name': 'validTo'
+        }, {
+            'type': 'string',
+            'name': 'createdAt'
+        }, {
+            'type': ['null', 'string'],
+            'name': 'updatedAt',
+            'default': "null"
+        }]
+    }
+    evolved = {
+        "fields": [{
+            "doc": "Unique id of the credit (UUIDv4)",
+            "name": "id",
+            "type": "string"
+        }, {
+            "doc": "Id of the account to which owns the credit",
+            "name": "accountId",
+            "type": "string"
+        }, {
+            "doc": "System which the credit originated from [\"ECOM\"]",
+            "name": "externalSource",
+            "type": "string"
+        }, {
+            "doc": "Id in the system the credit originated from (Source \"ECOM\": order item id). NOTICE: null is represented as empty string to avoid schema compatibility break",
+            "name": "externalId",
+            "type": "string"
+        }, {
+            "doc": "Associated product of the credit",
+            "name": "product",
+            "type": {
+                "fields": [{
+                    "doc": "Unique id of the product",
+                    "name": "id",
+                    "type": "string"
+                }, {
+                    "doc": "deprecated",
+                    "name": "externalSource",
+                    "type": "string"
+                }, {
+                    "doc": "deprecated",
+                    "name": "externalId",
+                    "type": "string"
+                }, {
+                    "default": "null",
+                    "doc": "Type of the product [\"JS24FREE\", \"JS24PLUS\", \"JS24SOLO\"]",
+                    "name": "type",
+                    "type": ["null", "string"]
+                }, {
+                    "default": "null",
+                    "doc": "How many days an ad will be online in case of runtime products",
+                    "name": "publicationDays",
+                    "type": ["null", "int"]
+                }, {
+                    "doc": "Translations of the product name",
+                    "name": "name",
+                    "type": {
+                        "fields": [{
+                            "default": "null",
+                            "doc": "Translation in german",
+                            "name": "de",
+                            "type": ["null", "string"]
+                        }, {
+                            "default": "null",
+                            "doc": "Translation in french",
+                            "name": "fr",
+                            "type": ["null", "string"]
+                        }, {
+                            "default": "null",
+                            "doc": "Translation in english",
+                            "name": "en",
+                            "type": ["null", "string"]
+                        }],
+                        "name": "translation",
+                        "namespace": "marketplace.core.entity",
+                        "type": "record"
+                    }
+                }],
+                "name": "product",
+                "namespace": "marketplace.core.entity",
+                "type": "record"
+            }
+        }, {
+            "doc": "From when the credit is valid (ISO-8601)",
+            "name": "validFrom",
+            "type": "string"
+        }, {
+            "doc": "Till when the credit is valid (ISO-8601)",
+            "name": "validTo",
+            "type": "string"
+        }, {
+            "doc": "When the credit was created (ISO-8601)",
+            "name": "createdAt",
+            "type": "string"
+        }, {
+            "default": "null",
+            "doc": "When the credit was updated (ISO-8601)",
+            "name": "updatedAt",
+            "type": ["null", "string"]
+        }],
+        "name": "credit",
+        "namespace": "marketplace.core.entity",
+        "type": "record"
+    }
+
+    init = TypedSchema.parse_avro(jsonlib.dumps(init))
+    evolved = TypedSchema.parse_avro(jsonlib.dumps(evolved))
+    c = Compatibility(init, evolved, compatibility)
+    try:
+        c.check()
+    except Exception as e:
+        assert isinstance(e, IncompatibleSchema)
+
