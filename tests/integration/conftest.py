@@ -458,7 +458,6 @@ def configure_and_start_kafka(kafka_dir: Path, zk: ZKConfig) -> Tuple[KafkaConfi
     data_dir.mkdir(parents=True)
     config_dir.mkdir(parents=True)
 
-    blacklist = [zk.admin_port, zk.client_port]
     plaintext_port = get_random_port(port_range=KAFKA_PORTS, blacklist=[])
 
     config = KafkaConfig(
