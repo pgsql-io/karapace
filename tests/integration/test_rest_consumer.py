@@ -1,3 +1,4 @@
+from kafka import KafkaProducer
 from tests.utils import consumer_valid_payload, new_consumer, new_topic, REST_HEADERS, schema_data
 
 import base64
@@ -63,7 +64,9 @@ async def test_assignment(rest_async_client, admin_client, trail):
 
 
 @pytest.mark.parametrize("trail", ["", "/"])
-async def test_subscription(rest_async_client, admin_client, producer, trail):
+async def test_subscription(rest_async_client, admin_client, kafka_config, trail):
+    producer = KafkaProducer(bootstrap_servers=[kafka_config.broker])
+
     header = REST_HEADERS["binary"]
     group_name = "sub_group"
     topic_name = new_topic(admin_client)
@@ -230,7 +233,9 @@ async def test_offsets(rest_async_client, admin_client, trail):
 
 
 @pytest.mark.parametrize("trail", ["", "/"])
-async def test_consume(rest_async_client, admin_client, producer, trail):
+async def test_consume(rest_async_client, admin_client, kafka_config, trail):
+    producer = KafkaProducer(bootstrap_servers=[kafka_config.broker])
+
     # avro to be handled in a separate testcase ??
     values = {
         "json": [json.dumps({

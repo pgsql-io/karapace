@@ -1,3 +1,4 @@
+from kafka import KafkaProducer
 from kafka.errors import UnknownTopicOrPartitionError
 from pytest import raises
 from tests.utils import new_topic, REST_HEADERS, schema_avro_json, second_obj, second_schema_json, test_objects_avro
@@ -121,7 +122,9 @@ async def test_avro_publish(rest_async_client, registry_async_client, admin_clie
             # assert res.status == 422, f"Expecting schema {second_schema_json} to not match records {test_objects}"
 
 
-def test_admin_client(admin_client, producer):
+def test_admin_client(admin_client, kafka_config):
+    producer = KafkaProducer(bootstrap_servers=[kafka_config.broker])
+
     topic_names = [new_topic(admin_client) for i in range(10, 13)]
     topic_info = admin_client.cluster_metadata()
     retrieved_names = list(topic_info["topics"].keys())
@@ -247,7 +250,9 @@ async def test_brokers(rest_async_client):
     assert len(res.json()) == 1, "Only one broker should be running"
 
 
-async def test_partitions(rest_async_client, admin_client, producer):
+async def test_partitions(rest_async_client, admin_client, kafka_config):
+    producer = KafkaProducer(bootstrap_servers=[kafka_config.broker])
+
     # TODO -> This seems to be the only combination accepted by the offsets endpoint
     topic_name = new_topic(admin_client)
     header = {"Accept": "*/*", "Content-Type": "application/vnd.kafka.v2+json"}

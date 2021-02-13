@@ -6,7 +6,7 @@ See LICENSE for details
 """
 from dataclasses import dataclass
 from filelock import FileLock
-from kafka import KafkaAdminClient, KafkaProducer
+from kafka import KafkaAdminClient
 from karapace.avro_compatibility import SchemaCompatibilityResult
 from karapace.config import set_config_defaults, write_config
 from karapace.kafka_rest_apis import KafkaRest, KafkaRestAdminClient
@@ -312,15 +312,6 @@ def fixture_kafka_config(session_tmppath: Path, zkserver: ZKConfig, pytestconfig
             time.sleep(5)
             os.kill(proc.pid, signal.SIGKILL)
             proc.wait(timeout=10.0)
-
-
-@pytest.fixture(scope="function", name="producer")
-def fixture_producer(kafka_config: KafkaConfig) -> KafkaProducer:
-    prod = KafkaProducer(bootstrap_servers=[kafka_config.broker])
-    try:
-        yield prod
-    finally:
-        prod.close()
 
 
 @pytest.fixture(scope="function", name="admin_client")
