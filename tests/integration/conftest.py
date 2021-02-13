@@ -81,9 +81,9 @@ class Expiration:
 
 @dataclass
 class ZKConfig:
+    host: str
     client_port: int
     admin_port: int
-    path: str
 
 
 def pytest_assertrepr_compare(op, left, right) -> Optional[List[str]]:
@@ -120,6 +120,10 @@ def pytest_assertrepr_compare(op, left, right) -> Optional[List[str]]:
         return lines
 
     return None
+
+
+def pytest_addoption(parser, pluginmanager) -> None:  # pylint: disable=unused-argument
+    parser.addoption("--zookeeper-dsn", help="host=<str>;client_port=<int>;admin_port=<int>")
 
 
 def port_is_listening(hostname: str, port: int, ipv6: bool) -> bool:
@@ -195,10 +199,40 @@ def lock_path_for(path: Path) -> Path:
     return path.with_suffix(''.join(suffixes))
 
 
+def dsn_to_dict(dsn: str) -> dict:
+    """ Converts a DSN string into a dictionary
+
+    >>> dsn_to_dict('')
+    dict()
+    >>> dsn_to_dict('key=value')
+    {'key': 'value'}
+    >>> dsn_to_dict('k1=v;k2=v;k3=v3')
+    {'k1': 'v', 'k2': 'v', 'k3': 'v3'}
+    """
+    keys_and_values = dsn.split(';')
+    result = dict(kv.split('=', maxsplit=1) for kv in keys_and_values)
+    return result
+
+
+def zookeeper_dsn_to_config(zookeeper_dsn: str) -> ZKConfig:
+    dsn = dsn_to_dict(zookeeper_dsn)
+    return ZKConfig(
+        host=dsn['host'],
+        client_port=int(dsn['client_port']),
+        admin_port=int(dsn['admin_port']),
+    )
+
+
+def kafka_dsn_to_config(kafka_dsn: str) -> KafkaConfig:
+    dsn = dsn_to_multidict(kafka_dsn)
+    return KafkaConfig(host=dsn['broker'][0])
+
+
 @pytest.fixture(scope="session", name="zkserver")
-def fixture_zkserver(session_tmppath: Path) -> Iterator[Optional[ZKConfig]]:
-    if REGISTRY_URI in os.environ or REST_URI in os.environ:
-        yield None
+def fixture_zkserver(session_tmppath: Path, pytestconfig) -> Iterator[ZKConfig]:
+    zookeeper_dsn = pytestconfig.getoption('zookeeper_dsn')
+    if zookeeper_dsn:
+        yield zookeeper_dsn_to_config(zookeeper_dsn)
         return
 
     zk_dir = session_tmppath / "zk"
@@ -502,7 +536,7 @@ def configure_and_start_kafka(kafka_dir: Path, zk: ZKConfig) -> Tuple[KafkaConfi
         "transaction.state.log.num.partitions": 16,
         "transaction.state.log.replication.factor": 1,
         "zookeeper.connection.timeout.ms": 6000,
-        "zookeeper.connect": "{}:{}".format("127.0.0.1", zk.client_port)
+        "zookeeper.connect": f"{zk.host}:{zk.client_port}",
     }
 
     with config_path.open("w") as fp:
@@ -532,9 +566,9 @@ def configure_and_start_zk(zk_dir: Path) -> Tuple[ZKConfig, Popen]:
     client_port = get_random_port(port_range=ZK_PORT_RANGE, blacklist=[])
     admin_port = get_random_port(port_range=ZK_PORT_RANGE, blacklist=[client_port])
     config = ZKConfig(
+        host='127.0.0.1',
         client_port=client_port,
         admin_port=admin_port,
-        path=str(zk_dir),
     )
     zoo_cfg = """
 # The number of milliseconds of each tick
@@ -576,7 +610,7 @@ skipACL=yes
 """.format(
         client_port=config.client_port,
         admin_port=config.admin_port,
-        path=config.path,
+        path=str(zk_dir),
     )
     cfg_path.write_text(zoo_cfg)
     env = {
