@@ -102,16 +102,7 @@ REGISTRY_URI = "REGISTRY_URI"
 
 @dataclass
 class KafkaConfig:
-    datadir: str
-    kafka_keystore_password: str
-    kafka_port: int
-    zookeeper_port: int
-
-
-def get_broker_ip():
-    if REST_URI in os.environ and REGISTRY_URI in os.environ:
-        return urlparse(os.environ[REGISTRY_URI]).hostname
-    return "127.0.0.1"
+    broker: str
 
 
 async def new_consumer(c, group, fmt="avro", trail=""):
@@ -146,18 +137,3 @@ def new_topic(admin_client, prefix="topic"):
     except TopicAlreadyExistsError:
         pass
     return tn
-
-
-def mock_factory(app_name):
-    def inner():
-        app = MagicMock()
-        app.type = app_name
-        app.serializer = MagicMock()
-        app.consumer_manager = MagicMock()
-        app.serializer.registry_client = MagicMock()
-        app.consumer_manager.deserializer = MagicMock()
-        app.consumer_manager.hostname = "http://localhost:8082"
-        app.consumer_manager.deserializer.registry_client = MagicMock()
-        return app, None
-
-    return inner

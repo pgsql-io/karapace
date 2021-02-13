@@ -13,7 +13,7 @@ from karapace.kafka_rest_apis import KafkaRest, KafkaRestAdminClient
 from karapace.schema_registry_apis import KarapaceSchemaRegistry
 from pathlib import Path
 from subprocess import Popen
-from tests.utils import Client, client_for, get_broker_ip, KafkaConfig, mock_factory, new_random_name, REGISTRY_URI, REST_URI
+from tests.utils import Client, client_for, KafkaConfig, new_random_name
 from typing import AsyncIterator, Dict, Iterator, List, Optional, Tuple
 
 import os
@@ -124,6 +124,7 @@ def pytest_assertrepr_compare(op, left, right) -> Optional[List[str]]:
 
 def pytest_addoption(parser, pluginmanager) -> None:  # pylint: disable=unused-argument
     parser.addoption("--zookeeper-dsn", help="host=<str>;client_port=<int>;admin_port=<int>")
+    parser.addoption("--kafka-dsn", help="broker=<str>")
 
 
 def port_is_listening(hostname: str, port: int, ipv6: bool) -> bool:
@@ -140,10 +141,9 @@ def port_is_listening(hostname: str, port: int, ipv6: bool) -> bool:
         return False
 
 
-def wait_for_kafka(port: int, *, hostname: str = "127.0.0.1", wait_time: float = 20.0) -> None:
-    bootstrap_server = f"{hostname}:{port}"
+def wait_for_kafka(broker: str, *, wait_time: float = 20.0) -> None:
     expiration = Expiration.from_timeout(
-        msg=f"Could not contact kafka cluster on host `{bootstrap_server}`",
+        msg=f"Could not contact kafka cluster on host `{broker}`",
         timeout=wait_time,
     )
 
@@ -151,7 +151,7 @@ def wait_for_kafka(port: int, *, hostname: str = "127.0.0.1", wait_time: float =
     while not list_topics_successful:
         expiration.raise_if_expired()
         try:
-            KafkaAdminClient(bootstrap_servers=bootstrap_server).list_topics()
+            KafkaAdminClient(bootstrap_servers=[broker]).list_topics()
         except Exception as e:  # pylint: disable=broad-except
             print(f"Error checking kafka cluster: {e}")
             time.sleep(2.0)
@@ -206,11 +206,36 @@ def dsn_to_dict(dsn: str) -> dict:
     dict()
     >>> dsn_to_dict('key=value')
     {'key': 'value'}
+    >>> dsn_to_dict('key=value1;key=value2')
+    ValueError(...)
     >>> dsn_to_dict('k1=v;k2=v;k3=v3')
     {'k1': 'v', 'k2': 'v', 'k3': 'v3'}
     """
-    keys_and_values = dsn.split(';')
-    result = dict(kv.split('=', maxsplit=1) for kv in keys_and_values)
+    keys_and_values = (kv.split('=', maxsplit=1) for kv in dsn.split(';'))
+    result = dict()
+    for key, value in keys_and_values:
+        if key in result:
+            raise ValueError(f'Duplicated key {key}')
+        result[key] = value
+    return result
+
+
+def dsn_to_multidict(dsn: str) -> dict:
+    """ Converts a DSN string into a dictionary
+
+    >>> dsn_to_dict('')
+    dict()
+    >>> dsn_to_dict('key=value')
+    {'key': ['value']}
+    >>> dsn_to_dict('key=value1;key=value2')
+    {'key': ['value1', 'value2']}
+    >>> dsn_to_dict('k1=v;k2=v;k3=v3')
+    {'k1': ['v'], 'k2': ['v'], 'k3': ['v3']}
+    """
+    keys_and_values = (kv.split('=', maxsplit=1) for kv in dsn.split(';'))
+    result = dict()
+    for key, value in keys_and_values:
+        result.setdefault(key, list()).append(value)
     return result
 
 
@@ -258,10 +283,11 @@ def fixture_zkserver(session_tmppath: Path, pytestconfig) -> Iterator[ZKConfig]:
             proc.wait(timeout=10.0)
 
 
-@pytest.fixture(scope="session", name="kafka_server")
-def fixture_kafka_server(session_tmppath: Path, zkserver: ZKConfig) -> Iterator[Optional[KafkaConfig]]:
-    if REGISTRY_URI in os.environ or REST_URI in os.environ:
-        yield None
+@pytest.fixture(scope="session", name="kafka_config")
+def fixture_kafka_config(session_tmppath: Path, zkserver: ZKConfig, pytestconfig) -> Iterator[KafkaConfig]:
+    kafka_dsn = pytestconfig.getoption('kafka_dsn')
+    if kafka_dsn:
+        yield kafka_dsn_to_config(kafka_dsn)
         return
 
     kafka_dir = session_tmppath / "kafka"
@@ -279,7 +305,7 @@ def fixture_kafka_server(session_tmppath: Path, zkserver: ZKConfig) -> Iterator[
             transfer_file.write_bytes(pickle.dumps(config))
 
     try:
-        wait_for_kafka(config.kafka_port, wait_time=60)
+        wait_for_kafka(config.broker, wait_time=60)
         yield config
     finally:
         if proc is not None:
@@ -289,13 +315,8 @@ def fixture_kafka_server(session_tmppath: Path, zkserver: ZKConfig) -> Iterator[
 
 
 @pytest.fixture(scope="function", name="producer")
-def fixture_producer(kafka_server: Optional[KafkaConfig]) -> KafkaProducer:
-    if not kafka_server:
-        assert REST_URI in os.environ or REGISTRY_URI in os.environ
-        kafka_uri = f"{get_broker_ip()}:9092"
-    else:
-        kafka_uri = "127.0.0.1:{}".format(kafka_server.kafka_port)
-    prod = KafkaProducer(bootstrap_servers=kafka_uri)
+def fixture_producer(kafka_config: KafkaConfig) -> KafkaProducer:
+    prod = KafkaProducer(bootstrap_servers=[kafka_config.broker])
     try:
         yield prod
     finally:
@@ -303,13 +324,8 @@ def fixture_producer(kafka_server: Optional[KafkaConfig]) -> KafkaProducer:
 
 
 @pytest.fixture(scope="function", name="admin_client")
-def fixture_admin(kafka_server: Optional[KafkaConfig]) -> Iterator[KafkaRestAdminClient]:
-    if not kafka_server:
-        assert REST_URI in os.environ or REGISTRY_URI in os.environ
-        kafka_uri = f"{get_broker_ip()}:9092"
-    else:
-        kafka_uri = "127.0.0.1:{}".format(kafka_server.kafka_port)
-    cli = KafkaRestAdminClient(bootstrap_servers=kafka_uri)
+def fixture_admin(kafka_config: KafkaConfig) -> Iterator[KafkaRestAdminClient]:
+    cli = KafkaRestAdminClient(bootstrap_servers=[kafka_config.broker])
     try:
         yield cli
     finally:
@@ -317,33 +333,23 @@ def fixture_admin(kafka_server: Optional[KafkaConfig]) -> Iterator[KafkaRestAdmi
 
 
 @pytest.fixture(scope="function", name="rest_async")
-async def fixture_rest_async(tmp_path: Path, kafka_server: Optional[KafkaConfig],
+async def fixture_rest_async(tmp_path: Path, kafka_config: KafkaConfig,
                              registry_async_client: Client) -> AsyncIterator[KafkaRest]:
-    if not kafka_server:
-        assert REST_URI in os.environ
-        instance, _ = mock_factory("rest")()
-        yield instance
-    else:
-        config_path = tmp_path / "karapace_config.json"
-        kafka_port = kafka_server.kafka_port
+    config_path = tmp_path / "karapace_config.json"
 
-        config = set_config_defaults({
-            "log_level": "WARNING",
-            "bootstrap_uri": f"127.0.0.1:{kafka_port}",
-            "admin_metadata_max_age": 0
-        })
-        write_config(config_path, config)
-        rest = KafkaRest(config_file_path=str(config_path), config=config)
+    config = set_config_defaults({"log_level": "WARNING", "bootstrap_uri": kafka_config.broker, "admin_metadata_max_age": 0})
+    write_config(config_path, config)
+    rest = KafkaRest(config_file_path=str(config_path), config=config)
 
-        assert rest.serializer.registry_client
-        assert rest.consumer_manager.deserializer.registry_client
-        rest.serializer.registry_client.client = registry_async_client
-        rest.consumer_manager.deserializer.registry_client.client = registry_async_client
-        try:
-            yield rest
-        finally:
-            rest.close()
-            await rest.close_producers()
+    assert rest.serializer.registry_client
+    assert rest.consumer_manager.deserializer.registry_client
+    rest.serializer.registry_client.client = registry_async_client
+    rest.consumer_manager.deserializer.registry_client.client = registry_async_client
+    try:
+        yield rest
+    finally:
+        rest.close()
+        await rest.close_producers()
 
 
 @pytest.fixture(scope="function", name="rest_async_client")
@@ -354,20 +360,17 @@ async def fixture_rest_async_client(rest_async: KafkaRest, aiohttp_client) -> As
 
 
 @pytest.fixture(scope="function", name="registry_async_pair")
-def fixture_registry_async_pair(tmp_path: Path, kafka_server: Optional[KafkaConfig]):
-    assert kafka_server, f"registry_async_pair can not be used if the env variable `{REGISTRY_URI}` or `{REST_URI}` is set"
-
+def fixture_registry_async_pair(tmp_path: Path, kafka_config: KafkaConfig):
     master_config_path = tmp_path / "karapace_config_master.json"
     slave_config_path = tmp_path / "karapace_config_slave.json"
     master_port = get_random_port(port_range=REGISTRY_PORT_RANGE, blacklist=[])
     slave_port = get_random_port(port_range=REGISTRY_PORT_RANGE, blacklist=[master_port])
-    kafka_port = kafka_server.kafka_port
     topic_name = new_random_name("schema_pairs")
     group_id = new_random_name("schema_pairs")
     write_config(
         master_config_path, {
             "log_level": "WARNING",
-            "bootstrap_uri": f"127.0.0.1:{kafka_port}",
+            "bootstrap_uri": kafka_config.broker,
             "topic_name": topic_name,
             "group_id": group_id,
             "advertised_hostname": "127.0.0.1",
@@ -378,7 +381,7 @@ def fixture_registry_async_pair(tmp_path: Path, kafka_server: Optional[KafkaConf
     write_config(
         slave_config_path, {
             "log_level": "WARNING",
-            "bootstrap_uri": f"127.0.0.1:{kafka_port}",
+            "bootstrap_uri": kafka_config.broker,
             "topic_name": topic_name,
             "group_id": group_id,
             "advertised_hostname": "127.0.0.1",
@@ -398,29 +401,22 @@ def fixture_registry_async_pair(tmp_path: Path, kafka_server: Optional[KafkaConf
 
 
 @pytest.fixture(scope="function", name="registry_async")
-async def fixture_registry_async(tmp_path: Path,
-                                 kafka_server: Optional[KafkaConfig]) -> AsyncIterator[KarapaceSchemaRegistry]:
-    if not kafka_server:
-        assert REGISTRY_URI in os.environ or REST_URI in os.environ
-        instance, _ = mock_factory("registry")()
-        yield instance
-    else:
-        config_path = tmp_path / "karapace_config.json"
-        kafka_port = kafka_server.kafka_port
+async def fixture_registry_async(tmp_path: Path, kafka_config: KafkaConfig) -> AsyncIterator[KarapaceSchemaRegistry]:
+    config_path = tmp_path / "karapace_config.json"
 
-        config = set_config_defaults({
-            "log_level": "WARNING",
-            "bootstrap_uri": f"127.0.0.1:{kafka_port}",
-            "topic_name": new_random_name(),
-            "group_id": new_random_name("schema_registry")
-        })
-        write_config(config_path, config)
-        registry = KarapaceSchemaRegistry(config_file_path=str(config_path), config=set_config_defaults(config))
-        await registry.get_master()
-        try:
-            yield registry
-        finally:
-            registry.close()
+    config = set_config_defaults({
+        "log_level": "WARNING",
+        "bootstrap_uri": kafka_config.broker,
+        "topic_name": new_random_name(),
+        "group_id": new_random_name("schema_registry")
+    })
+    write_config(config_path, config)
+    registry = KarapaceSchemaRegistry(config_file_path=str(config_path), config=set_config_defaults(config))
+    await registry.get_master()
+    try:
+        yield registry
+    finally:
+        registry.close()
 
 
 @pytest.fixture(scope="function", name="registry_async_client")
@@ -492,20 +488,17 @@ def configure_and_start_kafka(kafka_dir: Path, zk: ZKConfig) -> Tuple[KafkaConfi
     data_dir.mkdir(parents=True)
     config_dir.mkdir(parents=True)
 
-    plaintext_port = get_random_port(port_range=KAFKA_PORTS, blacklist=[])
+    host = '127.0.0.1'
+    port = get_random_port(port_range=KAFKA_PORTS, blacklist=[])
+    broker = f'{host}:{port}'
 
-    config = KafkaConfig(
-        datadir=str(data_dir),
-        kafka_keystore_password="secret",
-        kafka_port=plaintext_port,
-        zookeeper_port=zk.client_port,
-    )
+    config = KafkaConfig(broker=broker)
 
     advertised_listeners = ",".join([
-        "PLAINTEXT://127.0.0.1:{}".format(plaintext_port),
+        f"PLAINTEXT://{host}:{port}",
     ])
     listeners = ",".join([
-        "PLAINTEXT://:{}".format(plaintext_port),
+        f"PLAINTEXT://:{port}",
     ])
 
     kafka_config = {
@@ -519,7 +512,7 @@ def configure_and_start_kafka(kafka_dir: Path, zk: ZKConfig) -> Tuple[KafkaConfi
         "inter.broker.protocol.version": KAFKA_CURRENT_VERSION,
         "listeners": listeners,
         "log.cleaner.enable": "true",
-        "log.dirs": config.datadir,
+        "log.dirs": str(data_dir),
         "log.message.format.version": KAFKA_CURRENT_VERSION,
         "log.retention.check.interval.ms": 300000,
         "log.segment.bytes": 200 * 1024 * 1024,  # 200 MiB
