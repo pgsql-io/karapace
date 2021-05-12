@@ -353,7 +353,8 @@ class KarapaceSchemaRegistry(KarapaceBase):
             self.r(
                 body={
                     "error_code": SchemaErrorCodes.INVALID_COMPATIBILITY_LEVEL.value,
-                    "message": "Invalid compatibility level. Valid values are none, backward, forward and full",
+                    "message": "Invalid compatibility level. Valid values are " +
+                    "none, backward, forward, full, backward_transitive, forward_transitive, and full_transitive",
                 },
                 content_type=content_type,
                 status=HTTPStatus.UNPROCESSABLE_ENTITY,
@@ -391,7 +392,7 @@ class KarapaceSchemaRegistry(KarapaceBase):
         self.r(
             body={
                 "error_code": SchemaErrorCodes.SUBJECT_NOT_FOUND.value,
-                "message": "Subject not found.",
+                "message": f"Subject '{subject}' not found.",
             },
             content_type=content_type,
             status=HTTPStatus.NOT_FOUND,

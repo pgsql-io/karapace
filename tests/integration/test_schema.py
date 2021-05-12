@@ -1378,7 +1378,8 @@ async def test_config(registry_async_client, trail):
     res = await registry_async_client.put(f"config{trail}", json={"compatibility": "nonexistentmode"})
     assert res.status_code == 422
     assert res.json()["error_code"] == 42203
-    assert res.json()["message"] == "Invalid compatibility level. Valid values are none, backward, forward and full"
+    assert res.json()["message"] == "Invalid compatibility level. Valid values are "\
+           + "none, backward, forward, full, backward_transitive, forward_transitive, and full_transitive"
     assert res.headers["Content-Type"] == "application/vnd.schemaregistry.v1+json"
 
     # Create a new subject so we can try setting its config
@@ -1393,7 +1394,7 @@ async def test_config(registry_async_client, trail):
     res = await registry_async_client.get(f"config/{subject}{trail}")
     assert res.status_code == 404
     assert res.json()["error_code"] == 40401
-    assert res.json()["message"] == "Subject not found."
+    assert res.json()["message"] == f"Subject '{subject}' not found."
 
     res = await registry_async_client.put(f"config/{subject}{trail}", json={"compatibility": "FULL"})
     assert res.status_code == 200
